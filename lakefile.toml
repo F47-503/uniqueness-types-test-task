@@ -8,3 +8,8 @@ name = "TestTask"
 [[lean_exe]]
 name = "testtask"
 root = "Main"
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.23.0"
