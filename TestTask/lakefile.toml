@@ -1,0 +1,10 @@
+name = "TestTask"
+version = "0.1.0"
+defaultTargets = ["testtask"]
+
+[[lean_lib]]
+name = "TestTask"
+
+[[lean_exe]]
+name = "testtask"
+root = "Main"
