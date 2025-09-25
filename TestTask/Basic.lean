@@ -2,10 +2,11 @@ import Mathlib.Data.Finmap
 
 inductive IntExpr: Type where
 | const: Int → IntExpr
+| ite: Bool → IntExpr → IntExpr → IntExpr
+| val: String → IntExpr
 | add: IntExpr → IntExpr → IntExpr
 | sub: IntExpr → IntExpr → IntExpr
 | mul: IntExpr → IntExpr → IntExpr
-| val: String → IntExpr
 deriving Repr, Inhabited
 
 def basicExpr := IntExpr.add (IntExpr.const 3) (IntExpr.val "sp")
@@ -19,6 +20,8 @@ variable {vars: VarMap}
 @[reducible]
 def eval: IntExpr → Option Int
 | .const α => do pure α
+| .ite cond thn els => if cond then eval thn else eval els
+| .val s => vars.lookup s
 | .add e₁ e₂ => do
   let l ← eval e₁
   let r ← eval e₂
@@ -31,7 +34,6 @@ def eval: IntExpr → Option Int
   let l ← eval e₁
   let r ← eval e₂
   pure (l * r)
-| .val s => vars.lookup s
 
 #eval eval (vars := List.toFinmap []) basicExpr
 #eval eval (vars := List.toFinmap [⟨"sp", 3⟩]) basicExpr
@@ -39,6 +41,7 @@ def eval: IntExpr → Option Int
 
 def IntExprMeasure: IntExpr → Nat
 | .const _ => 1
+| .ite _ thn els => IntExprMeasure thn + IntExprMeasure els + 1
 | .add e₁ e₂ => IntExprMeasure e₁ + IntExprMeasure e₂ + 1
 | .sub e₁ e₂ => IntExprMeasure e₁ + IntExprMeasure e₂ + 1
 | .mul e₁ e₂ => IntExprMeasure e₁ + IntExprMeasure e₂ + 1
@@ -69,6 +72,7 @@ mutual
 
   def step (expr: IntExpr): Option IntExpr := match expr with
   | .const α => some (.const α)
+  | .ite cond thn els => if cond then thn else els
   | .add e₁ e₂ => stepBinOp (.add) (fun x y => x + y) e₁ e₂ (by simp [IntExprMeasure])
   | .sub e₁ e₂ => stepBinOp (.sub) (fun x y => x - y) e₁ e₂ (by simp [IntExprMeasure])
   | .mul e₁ e₂ => stepBinOp (.mul) (fun x y => x * y) e₁ e₂ (by simp [IntExprMeasure])
@@ -129,6 +133,8 @@ theorem decreasing_measure:
       exact xih_res }
   }
   { simp at hexp }
+  { simp [step, IntExprMeasure, Option.bind] at *
+    split_ifs with hite <;> simp <;> omega }
   simp [step, IntExprMeasure] at *
   simp [Option.bind]
   split
@@ -139,6 +145,8 @@ theorem decreasing_measure:
   simp [←heq, IntExprMeasure]
   simp at heq
 
+set_option maxHeartbeats 1000000
+
 theorem step_preserves_eval:
   (do
     let res ← step exp (vars := vars)
@@ -146,6 +154,14 @@ theorem step_preserves_eval:
     pure eval_res) = eval exp (vars := vars) := by
   induction exp
   { simp [step, eval, Option.bind] }
+  { rename_i x y xih yih
+    simp only [eval]
+    simp [step]
+    split <;> simp [Option.bind] }
+  { simp [eval, Option.bind, step]
+    split <;> aesop
+    simp [eval] at heq_1
+    simp [heq_1] }
   all_goals try {
     rename_i x y xih yih
     simp only [eval]
@@ -168,10 +184,6 @@ theorem step_preserves_eval:
     { simp [heq, heq_2] }
     { simp [heq_3, heq_2] }
     { simp [heq_3, heq_2] } }
-  simp [eval, Option.bind, step]
-  split <;> aesop
-  simp [eval] at heq_1
-  simp [heq_1]
 
 theorem step_none_eq_eval_none (exp: IntExpr):
   step exp (vars := vars) = none → eval exp (vars := vars) = none := by
