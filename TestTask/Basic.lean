@@ -1,5 +1,6 @@
 import Mathlib.Data.Finmap
 
+--Expression data structure
 inductive IntExpr: Type where
 | const: Int → IntExpr
 | ite: Bool → IntExpr → IntExpr → IntExpr
@@ -9,14 +10,17 @@ inductive IntExpr: Type where
 | mul: IntExpr → IntExpr → IntExpr
 deriving Repr, Inhabited
 
+--basic example for an expression
 def basicExpr := IntExpr.add (IntExpr.const 3) (IntExpr.val "sp")
 
 #eval basicExpr
 
+--map of variables
 abbrev VarMap := Finmap (α := String) (fun _ => Int)
 
 variable {vars: VarMap}
 
+--evaluation function
 @[reducible]
 def eval: IntExpr → Option Int
 | .const α => do pure α
@@ -35,10 +39,12 @@ def eval: IntExpr → Option Int
   let r ← eval e₂
   pure (l * r)
 
+--evaluation function example
 #eval eval (vars := List.toFinmap []) basicExpr
 #eval eval (vars := List.toFinmap [⟨"sp", 3⟩]) basicExpr
 
 
+--measure on expressions which is helpful in many proofs
 def IntExprMeasure: IntExpr → Nat
 | .const _ => 1
 | .ite _ thn els => IntExprMeasure thn + IntExprMeasure els + 1
@@ -47,20 +53,25 @@ def IntExprMeasure: IntExpr → Nat
 | .mul e₁ e₂ => IntExprMeasure e₁ + IntExprMeasure e₂ + 1
 | .val _ => 2
 
+--measure is always positive
 theorem pos_measure (exp: IntExpr): 0 < IntExprMeasure exp := by
   induction exp <;> simp [IntExprMeasure]
 
 set_option linter.unusedVariables false in
 mutual
+  --if we have a constructor of 2 variables, step can be unified
   def stepBinOp
   (constr: IntExpr → IntExpr → IntExpr)
   (fn: Int → Int → Int) (x y: IntExpr)
   (h_constr: ∀ x y, IntExprMeasure (constr x y) = IntExprMeasure x + IntExprMeasure y + 1): Option IntExpr :=
+  --if both are constants, evaluate
   match x, y with
   | .const val₁, .const val₂ => some (.const (fn val₁ val₂))
+  --if lhs is constant, reduce in rhs
   | .const val, e₂ => do
     let r ← step e₂
     pure (constr (.const val) r)
+  --if lhs is non-constant, reduce in lhs
   | e₁, e₂ => do
     let l ← step e₁
     pure (constr l e₂)
@@ -70,13 +81,16 @@ mutual
     simp [h_constr]
     apply pos_measure)
 
+  --small step semantics
   def step (expr: IntExpr): Option IntExpr := match expr with
   | .const α => some (.const α)
+  --if-then-else is reduced first, then subexpression
   | .ite cond thn els => if cond then thn else els
   | .add e₁ e₂ => stepBinOp (.add) (fun x y => x + y) e₁ e₂ (by simp [IntExprMeasure])
   | .sub e₁ e₂ => stepBinOp (.sub) (fun x y => x - y) e₁ e₂ (by simp [IntExprMeasure])
   | .mul e₁ e₂ => stepBinOp (.mul) (fun x y => x * y) e₁ e₂ (by simp [IntExprMeasure])
   | .val s =>
+    --if expression is a variable, try to substitute
     match vars.lookup s with
     | some val => some (.const val)
     | none => none
@@ -84,9 +98,11 @@ mutual
   decreasing_by (all_goals simp [IntExprMeasure])
 end
 
+--small-step examples
 #eval step basicExpr (vars := List.toFinmap [])
 #eval step basicExpr (vars := List.toFinmap [⟨"sp", 3⟩])
 
+--helper function that does n small-step reductions
 def step_iter (exp: IntExpr): Nat → Option IntExpr
 | 0 => exp
 | .succ n => do
@@ -94,25 +110,45 @@ def step_iter (exp: IntExpr): Nat → Option IntExpr
   let outer ← step_iter inner n
   pure outer
 
+--small-step iteration is additive
 theorem step_iter_add (exp: IntExpr) (k n: Nat):
   step_iter exp (k + n) (vars := vars) =
   (do
     let inner ← step_iter exp (vars := vars) n
     let outer ← step_iter inner (vars := vars) k
     pure outer) := by
+  --obvious by induction
   induction n generalizing exp with
   | zero => simp [step_iter]
   | succ k ih =>
     simp [step_iter, Option.bind]
     aesop
 
+--measure is decreasing after each step for any non-trivial expression
 theorem decreasing_measure:
   (∀ α, exp ≠ IntExpr.const α) → (
     (do
       let res ← step exp (vars := vars)
       pure (IntExprMeasure res)) < (some (IntExprMeasure exp))) := by
   intro hexp
+  --proof by induction
   induction exp
+  --const part
+  { simp at hexp }
+  --if-then-else part
+  { simp [step, IntExprMeasure, Option.bind] at *
+    split_ifs with hite <;> simp <;> omega }
+  --val part
+  { simp [step, IntExprMeasure] at *
+    simp [Option.bind]
+    split
+    { simp }
+    rename_i heq
+    split at heq
+    simp at heq
+    simp [←heq, IntExprMeasure]
+    simp at heq }
+  --binOp part
   all_goals try {
     simp [step, stepBinOp.eq_def, IntExprMeasure] at *
     split
@@ -130,38 +166,31 @@ theorem decreasing_measure:
       split at xih_res
       { simp [*] }
       simp [*, IntExprMeasure] at *
-      exact xih_res }
-  }
-  { simp at hexp }
-  { simp [step, IntExprMeasure, Option.bind] at *
-    split_ifs with hite <;> simp <;> omega }
-  simp [step, IntExprMeasure] at *
-  simp [Option.bind]
-  split
-  { simp }
-  rename_i heq
-  split at heq
-  simp at heq
-  simp [←heq, IntExprMeasure]
-  simp at heq
+      exact xih_res } }
 
 set_option maxHeartbeats 1000000
 
+--small-step operation preserves evaluation result for any expression
 theorem step_preserves_eval:
   (do
     let res ← step exp (vars := vars)
     let eval_res ← eval res (vars := vars)
     pure eval_res) = eval exp (vars := vars) := by
+  --proof by induction
   induction exp
+  --const part
   { simp [step, eval, Option.bind] }
+  --if-then-else part
   { rename_i x y xih yih
     simp only [eval]
     simp [step]
     split <;> simp [Option.bind] }
+  --val part
   { simp [eval, Option.bind, step]
     split <;> aesop
     simp [eval] at heq_1
     simp [heq_1] }
+  --binOp part
   all_goals try {
     rename_i x y xih yih
     simp only [eval]
@@ -185,19 +214,27 @@ theorem step_preserves_eval:
     { simp [heq_3, heq_2] }
     { simp [heq_3, heq_2] } }
 
+--if after a small-step reudction expression becomes none, evaluation is also none
 theorem step_none_eq_eval_none (exp: IntExpr):
   step exp (vars := vars) = none → eval exp (vars := vars) = none := by
+    --step result is almost always not none,
+    --so obvious by induction
     induction exp <;> intro hnone
     all_goals {
       simp [step, stepBinOp.eq_def, Option.bind, eval] at *
       try aesop
     }
 
+--this is the main theorem
+
+--if we do k small-step reductions where k is the measure decreased by 1,
+--the result is equal to the evaluation
 omit vars in
 theorem small_step_eval_bound (exp: IntExpr):
 ∀ svars: VarMap,
 ∀ k, IntExprMeasure exp ≤ k + 1 → step_iter exp k (vars := svars) = (do let res ← eval exp (vars := svars); pure (.const res)) := by
   intro vars k hk
+  --proof by induction on measure
   induction k generalizing exp
   { simp at hk
     cases exp
@@ -210,11 +247,13 @@ theorem small_step_eval_bound (exp: IntExpr):
     simp [IntExprMeasure] at hk }
   rename_i n ih
   rw [step_iter]
+  --const case
   by_cases const: ∃ α, exp = .const α
   { rcases const with ⟨α, hconst⟩
     have ih_const := ih exp (by simp [hconst, IntExprMeasure])
     simp [Option.bind, hconst, step] at *
     simp [ih_const] }
+  --step is not none case
   by_cases sh: ∃ exp₁, step exp (vars := vars) = some exp₁
   { rcases sh with ⟨exp₁, sh⟩
     have dec_measure := decreasing_measure (exp := exp) (vars := vars) (by aesop)
@@ -229,11 +268,16 @@ theorem small_step_eval_bound (exp: IntExpr):
       simp [heval] }
     simp [←Option.eq_none_iff_forall_ne_some] at heval
     simp [heval] }
+  --step is none case
   simp at *
   rw [←Option.eq_none_iff_forall_ne_some] at sh
   simp [Option.bind, sh]
   simp [step_none_eq_eval_none exp sh]
 
+--there exists a sequence of expressions,
+--such that any element is succeed by small-step result,
+--first element is the expression
+--and last element is evaluation result
 omit vars in
 theorem small_step_eval_seq (exp: IntExpr):
 ∀ svars: VarMap,
@@ -248,8 +292,10 @@ seq.getLast! = (do let evalRes ← eval exp (vars := svars); pure (.const evalRe
       let preRes ← step preSeq (vars := svars)
       pure preRes) := by
   intro vars
+  --get the result from the main theorem
   exists (List.range (IntExprMeasure exp)).map (step_iter exp (vars := vars))
   have := pos_measure exp
+  --do the proof with List lemmas
   repeat' constructor
   { simp; omega }
   { simp
